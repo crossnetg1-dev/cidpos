@@ -1,0 +1,608 @@
+// This is your Prisma schema file for POS System
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================
+// USER & AUTHENTICATION
+// ============================================
+
+model Role {
+  id          String   @id @default(uuid())
+  name        String   @unique // e.g., "Super Admin", "Cashier", "Manager"
+  permissions String // JSON string storing the boolean flags for each module
+  isSystem    Boolean  @default(false) // System roles cannot be deleted
+  users       User[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([name])
+}
+
+model User {
+  id            String    @id @default(uuid())
+  username      String    @unique
+  password      String // Hashed password
+  fullName      String
+  email         String?
+  phone         String?
+  role          String    @default("CASHIER") // OWNER, CASHIER, MANAGER (legacy)
+  roleId        String? // New role-based permission system
+  status        String    @default("ACTIVE") // ACTIVE, INACTIVE
+  rememberToken String?
+  lastLoginAt   DateTime?
+  lastLoginIp   String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  roleRelation     Role?             @relation(fields: [roleId], references: [id], onDelete: SetNull)
+  sales            Sale[]
+  purchases        Purchase[]
+  stockMovements   StockMovement[]
+  stockAdjustments StockAdjustment[]
+  shifts           Shift[]
+  activityLogs     ActivityLog[]
+  priceHistories   PriceHistory[]
+  purchasePayments PurchasePayment[]
+  customerPayments CustomerPayment[]
+  purchaseReturns  PurchaseReturn[]
+
+  @@index([username])
+  @@index([role])
+  @@index([roleId])
+  @@index([status])
+}
+
+// ============================================
+// PRODUCTS & CATEGORIES
+// ============================================
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  image       String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  products Product[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+model Unit {
+  id        String   @id @default(uuid())
+  name      String   @unique // e.g., "Kilogram", "Piece", "Box"
+  shortName String   @unique // e.g., "kg", "pcs", "box"
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([name])
+  @@index([shortName])
+  @@index([isActive])
+}
+
+model Product {
+  id            String    @id @default(uuid())
+  name          String
+  barcode       String?   @unique
+  sku           String?   @unique
+  description   String?
+  image         String?
+  categoryId    String
+  purchasePrice Decimal   @default(0) // Cost price
+  sellingPrice  Decimal   @default(0) // Selling price
+  stock         Decimal   @default(0)
+  minStockLevel Decimal   @default(0)
+  unit          String    @default("pcs") // pcs, kg, liter, etc.
+  expiryDate    DateTime?
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  category            Category             @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  saleItems           SaleItem[]
+  purchaseItems       PurchaseItem[]
+  stockMovements      StockMovement[]
+  stockAdjustments    StockAdjustment[]
+  salesReturns        SalesReturnItem[]
+  purchaseReturnItems PurchaseReturnItem[]
+  priceHistories      PriceHistory[]
+
+  @@index([name])
+  @@index([barcode])
+  @@index([categoryId])
+  @@index([isActive])
+  @@index([stock])
+}
+
+// ============================================
+// CUSTOMERS
+// ============================================
+
+model Customer {
+  id             String   @id @default(uuid())
+  name           String
+  phone          String?  @unique
+  email          String?
+  address        String?
+  creditLimit    Decimal  @default(0)
+  creditBalance  Decimal  @default(0) // Current debt
+  openingBalance Decimal  @default(0)
+  totalSpent     Decimal  @default(0) // Total amount spent across all sales
+  visitCount     Int      @default(0) // Number of purchases/visits
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  sales            Sale[]
+  salesReturns     SalesReturn[]
+  customerPayments CustomerPayment[]
+
+  @@index([name])
+  @@index([phone])
+  @@index([isActive])
+}
+
+// ============================================
+// SUPPLIERS
+// ============================================
+
+model Supplier {
+  id             String   @id @default(uuid())
+  name           String
+  companyName    String?
+  phone          String?
+  email          String?
+  address        String?
+  creditLimit    Decimal  @default(0)
+  creditBalance  Decimal  @default(0) // Amount we owe
+  openingBalance Decimal  @default(0)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  purchases        Purchase[]
+  purchasePayments PurchasePayment[]
+
+  @@index([name])
+  @@index([isActive])
+}
+
+// ============================================
+// SALES
+// ============================================
+
+model Sale {
+  id              String   @id @default(uuid())
+  invoiceNo       Int      @unique // Sequential numeric invoice number
+  saleNumber      String   @unique // Auto-generated (INV-XXXXXX format)
+  userId          String // Cashier/User who made the sale
+  customerId      String? // Optional customer
+  subtotal        Decimal  @default(0)
+  discount        Decimal  @default(0) // Discount amount
+  discountPercent Decimal  @default(0) // Discount percentage
+  tax             Decimal  @default(0)
+  total           Decimal  @default(0)
+  paymentMethod   String   @default("CASH") // CASH, KBZPAY, WAVEPAY, AYAPAY, CREDIT, SPLIT
+  paymentStatus   String   @default("PAID") // PAID, UNPAID, PARTIAL
+  saleType        String   @default("SALE") // SALE, DEBT_COLLECTION
+  cashReceived    Decimal? // For cash payments
+  change          Decimal? // Change given
+  status          String   @default("COMPLETED") // COMPLETED, HOLD, VOID, RETURNED
+  notes           String?
+  shiftId         String? // Related shift
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  user          User           @relation(fields: [userId], references: [id], onDelete: Restrict)
+  customer      Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  shift         Shift?         @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  items         SaleItem[]
+  salesReturns  SalesReturn[]
+  splitPayments SplitPayment[]
+
+  @@index([invoiceNo])
+  @@index([saleNumber])
+  @@index([userId])
+  @@index([customerId])
+  @@index([status])
+  @@index([createdAt])
+  @@index([paymentMethod])
+  @@index([paymentStatus])
+  @@index([saleType])
+}
+
+model SaleItem {
+  id        String   @id @default(uuid())
+  saleId    String
+  productId String
+  quantity  Decimal
+  unitPrice Decimal // Price at time of sale
+  discount  Decimal  @default(0)
+  tax       Decimal  @default(0)
+  total     Decimal
+  createdAt DateTime @default(now())
+
+  // Relations
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([saleId])
+  @@index([productId])
+}
+
+model SplitPayment {
+  id            String   @id @default(uuid())
+  saleId        String
+  paymentMethod String // CASH, KBZPAY, WAVEPAY, AYAPAY, CREDIT, SPLIT
+  amount        Decimal
+  createdAt     DateTime @default(now())
+
+  // Relations
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+}
+
+// ============================================
+// PURCHASES
+// ============================================
+
+model Purchase {
+  id         String    @id @default(uuid())
+  poNumber   String    @unique // Purchase Order Number
+  supplierId String
+  userId     String // User who created the purchase
+  subtotal   Decimal   @default(0)
+  discount   Decimal   @default(0)
+  tax        Decimal   @default(0)
+  total      Decimal   @default(0)
+  status     String    @default("PENDING") // PENDING, RECEIVED, PARTIAL, CANCELLED
+  receivedAt DateTime? // When goods were received
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  // Relations
+  supplier         Supplier          @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  user             User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items            PurchaseItem[]
+  purchasePayments PurchasePayment[]
+  purchaseReturns  PurchaseReturn[]
+
+  @@index([poNumber])
+  @@index([supplierId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model PurchaseItem {
+  id          String   @id @default(uuid())
+  purchaseId  String
+  productId   String
+  quantity    Decimal
+  unitPrice   Decimal
+  discount    Decimal  @default(0)
+  tax         Decimal  @default(0)
+  total       Decimal
+  receivedQty Decimal  @default(0) // Quantity received
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
+  @@index([productId])
+}
+
+model PurchasePayment {
+  id            String   @id @default(uuid())
+  purchaseId    String
+  supplierId    String
+  userId        String
+  amount        Decimal
+  paymentMethod String   @default("CASH") // CASH, BANK, CREDIT
+  paymentDate   DateTime @default(now())
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  // Relations
+  purchase Purchase @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseId])
+  @@index([supplierId])
+  @@index([userId])
+  @@index([paymentDate])
+}
+
+model PurchaseReturn {
+  id           String   @id @default(uuid())
+  purchaseId   String
+  userId       String
+  returnNumber String   @unique
+  total        Decimal  @default(0)
+  reason       String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  purchase Purchase             @relation(fields: [purchaseId], references: [id], onDelete: Restrict)
+  user     User                 @relation(fields: [userId], references: [id], onDelete: Restrict)
+  items    PurchaseReturnItem[]
+
+  @@index([purchaseId])
+  @@index([returnNumber])
+}
+
+model PurchaseReturnItem {
+  id               String   @id @default(uuid())
+  purchaseReturnId String
+  productId        String
+  quantity         Decimal
+  unitPrice        Decimal
+  total            Decimal
+  createdAt        DateTime @default(now())
+
+  // Relations
+  purchaseReturn PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  product        Product        @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([purchaseReturnId])
+  @@index([productId])
+}
+
+// ============================================
+// SALES RETURNS
+// ============================================
+
+model SalesReturn {
+  id           String   @id @default(uuid())
+  saleId       String
+  customerId   String?
+  returnNumber String   @unique
+  total        Decimal  @default(0)
+  refundMethod String   @default("CASH") // CASH, CREDIT_NOTE, EXCHANGE
+  reason       String? // DEFECTIVE, WRONG_ITEM, CUSTOMER_REQUEST, EXPIRED, OTHER
+  notes        String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  sale     Sale              @relation(fields: [saleId], references: [id], onDelete: Restrict)
+  customer Customer?         @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  items    SalesReturnItem[]
+
+  @@index([saleId])
+  @@index([returnNumber])
+  @@index([createdAt])
+}
+
+model SalesReturnItem {
+  id            String   @id @default(uuid())
+  salesReturnId String
+  productId     String
+  quantity      Decimal
+  unitPrice     Decimal
+  total         Decimal
+  reason        String? // DEFECTIVE, WRONG_ITEM, CUSTOMER_REQUEST, EXPIRED, OTHER
+  createdAt     DateTime @default(now())
+
+  // Relations
+  salesReturn SalesReturn @relation(fields: [salesReturnId], references: [id], onDelete: Cascade)
+  product     Product     @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@index([salesReturnId])
+  @@index([productId])
+}
+
+// ============================================
+// STOCK MANAGEMENT
+// ============================================
+
+model StockMovement {
+  id            String   @id @default(uuid())
+  productId     String
+  userId        String?
+  movementType  String // SALE, PURCHASE, RETURN_IN, RETURN_OUT, ADJUSTMENT, DAMAGE, EXPIRED, LOST, FOUND, TRANSFER_IN, TRANSFER_OUT
+  quantity      Decimal // Positive for IN, Negative for OUT
+  referenceId   String? // ID of related sale/purchase/etc
+  referenceType String? // "Sale", "Purchase", "Adjustment", etc
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  user    User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([movementType])
+  @@index([createdAt])
+  @@index([referenceId])
+}
+
+model StockAdjustment {
+  id         String   @id @default(uuid())
+  productId  String
+  userId     String
+  reason     String // COUNT, DAMAGE, EXPIRE, LOST, FOUND, CORRECTION, OTHER
+  beforeQty  Decimal
+  afterQty   Decimal
+  difference Decimal // afterQty - beforeQty
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================
+// STORE SETTINGS
+// ============================================
+
+model StoreSettings {
+  id            String   @id @default(uuid())
+  storeName     String   @default("My POS Store")
+  address       String?
+  phone         String?
+  currency      String   @default("MMK")
+  taxRate       Decimal  @default(0) // Percentage
+  receiptFooter String?  @default("Thank you for shopping with us!")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+// ============================================
+// CASH MANAGEMENT (SHIFTS)
+// ============================================
+
+model Shift {
+  id           String    @id @default(uuid())
+  userId       String
+  shiftNumber  String    @unique
+  openingCash  Decimal   @default(0)
+  closingCash  Decimal?
+  expectedCash Decimal? // Calculated from sales
+  difference   Decimal? // closingCash - expectedCash
+  status       String    @default("OPEN") // OPEN, CLOSED
+  openedAt     DateTime  @default(now())
+  closedAt     DateTime?
+
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sales Sale[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([openedAt])
+}
+
+// ============================================
+// CUSTOMER PAYMENTS
+// ============================================
+
+model CustomerPayment {
+  id            String   @id @default(uuid())
+  customerId    String
+  userId        String
+  amount        Decimal
+  paymentMethod String   @default("CASH") // CASH, KBZPAY, WAVEPAY, AYAPAY, CREDIT, SPLIT
+  paymentDate   DateTime @default(now())
+  notes         String?
+  createdAt     DateTime @default(now())
+
+  // Relations
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Restrict)
+  user     User     @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([customerId])
+  @@index([userId])
+  @@index([paymentDate])
+}
+
+// ============================================
+// PRICE HISTORY
+// ============================================
+
+model PriceHistory {
+  id        String   @id @default(uuid())
+  productId String
+  userId    String
+  oldPrice  Decimal
+  newPrice  Decimal
+  priceType String // "purchase" or "selling"
+  reason    String?
+  createdAt DateTime @default(now())
+
+  // Relations
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([productId])
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ============================================
+// AUDIT & ACTIVITY LOGS
+// ============================================
+
+model ActivityLog {
+  id           String   @id @default(uuid())
+  userId       String
+  activityType String // LOGIN, LOGOUT, CREATE, UPDATE, DELETE, VIEW, PRINT, EXPORT, IMPORT
+  entityType   String // "Product", "Sale", "Purchase", etc
+  entityId     String?
+  description  String
+  ipAddress    String?
+  userAgent    String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([activityType])
+  @@index([entityType])
+  @@index([createdAt])
+}
+
+// ============================================
+// SETTINGS
+// ============================================
+
+model Setting {
+  id        String   @id @default(uuid())
+  key       String   @unique
+  value     String // JSON string for complex values
+  category  String // "store", "receipt", "system", "printer", etc
+  updatedAt DateTime @updatedAt
+  updatedBy String?
+
+  @@index([key])
+  @@index([category])
+}
+
+// ============================================
+// NOTIFICATIONS
+// ============================================
+
+model Notification {
+  id         String    @id @default(uuid())
+  type       String // LOW_STOCK, EXPIRY_WARNING, PAYMENT_DUE, DAILY_SUMMARY, SYSTEM_ALERT
+  title      String
+  message    String
+  status     String    @default("UNREAD") // UNREAD, READ
+  entityType String? // "Product", "Customer", etc
+  entityId   String?
+  link       String? // URL to related page
+  createdAt  DateTime  @default(now())
+  readAt     DateTime?
+
+  @@index([status])
+  @@index([type])
+  @@index([createdAt])
+}
